@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Configure system CA bundle for secure SSL handshakes across cloud APIs
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUEST_CA_BUNDLE"] = certifi.where()
 
@@ -21,12 +22,14 @@ import docx2txt
 Path('uploads').mkdir(exist_ok=True)
 Path('chroma_db').mkdir(exist_ok=True)
 
+# Retrieval hyperparameters
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
 DEFAULT_CHUNK_SIZE = 900
 DEFAULT_CHUNK_OVERLAP = 150
 
 embeddings = GoogleGenerativeAIEmbeddings(model=EMBEDDING_MODEL)
 
+# Persistent Chroma vector store scoped to tenant/collection
 vectorstore = Chroma(
     collection_name='agentic_chatbot_docs',
     embedding_function=embeddings,
@@ -34,9 +37,11 @@ vectorstore = Chroma(
 )
 
 def clean_filename(raw_name: str) -> str:
+    """Strip internal UUID prefix from filename for human-readable citations."""
     return re.sub(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}_', '', raw_name)
 
 def extract_section_title(text: str) -> str:
+    """Extract structural section headings (Articles, Sections, Markdown headers) for citation tracing."""
     patterns = [
         r'(Điều\s+\d+[^:\n]*[:\.\-][^\n]+)',
         r'(Mục\s+\d+[^:\n]*[:\.\-][^\n]+)',
@@ -52,6 +57,7 @@ def extract_section_title(text: str) -> str:
     return ""
 
 def read_file_text(file_path: str) -> str:
+    """Extract raw text across supported document extensions."""
     path = Path(file_path)
     suffix = path.suffix.lower()
 
@@ -69,7 +75,14 @@ def read_file_text(file_path: str) -> str:
 
     raise ValueError("Unsupported file type")
 
-def add_document_to_rag(file_path: str, thread_id: str, original_filename: str | None = None, chunk_size: int = DEFAULT_CHUNK_SIZE, chunk_overlap: int = DEFAULT_CHUNK_OVERLAP):
+def add_document_to_rag(
+    file_path: str,
+    thread_id: str,
+    original_filename: str | None = None,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP
+):
+    """Ingest, chunk, and index a document into Chroma with conversation thread metadata."""
     text = read_file_text(file_path=file_path)
 
     if not text.strip():
@@ -86,6 +99,7 @@ def add_document_to_rag(file_path: str, thread_id: str, original_filename: str |
     docs: List[Document] = []
     current_section = ""
 
+    # Propagate latest heading forward across consecutive sub-chunks
     for idx, chunk in enumerate(chunks):
         found_section = extract_section_title(chunk)
         if found_section:
@@ -111,6 +125,8 @@ def add_document_to_rag(file_path: str, thread_id: str, original_filename: str |
     }
 
 class BM25Retriever:
+    """In-memory BM25 sparse keyword retriever for exact token matching."""
+
     def __init__(self, docs: List[Document], k: int = 4):
         self.docs = docs
         self.k = k
@@ -127,7 +143,17 @@ class BM25Retriever:
         scored = sorted(zip(self.docs, scores), key=lambda x: x[1], reverse=True)
         return [doc for doc, score in scored[:self.k]]
 
-def hybrid_retrieve(query: str, retrievers: List, weights: List[float], k: int = 4, rrf_k: int = 60) -> List[Document]:
+def hybrid_retrieve(
+    query: str,
+    retrievers: List,
+    weights: List[float],
+    k: int = 4,
+    rrf_k: int = 60
+) -> List[Document]:
+    """
+    Weighted Reciprocal Rank Fusion (RRF) combining dense semantic and sparse keyword ranks.
+    RRF Score = sum(weight * (1 / (rank + rrf_k)))
+    """
     doc_scores = {}
 
     for retriever, weight in zip(retrievers, weights):
@@ -143,10 +169,20 @@ def hybrid_retrieve(query: str, retrievers: List, weights: List[float], k: int =
     sorted_docs = sorted(doc_scores.values(), key=lambda x: x[0], reverse=True)
     return [doc for _, doc in sorted_docs[:k]]
 
-def retrieve_from_rag(query: str, thread_id: str, k: int = 4, weights: Optional[List[float]] = None) -> str:
+def retrieve_from_rag(
+    query: str,
+    thread_id: str,
+    k: int = 4,
+    weights: Optional[List[float]] = None
+) -> str:
+    """
+    Execute hybrid retrieval (Dense Vector + BM25) scoped to the active conversation thread.
+    Formats top candidates with human-readable source citations.
+    """
     if weights is None:
         weights = [0.5, 0.5]
 
+    # 1. Dense vector candidate retrieval from ChromaDB
     vector_retriever = vectorstore.as_retriever(
         search_kwargs={
             "filter": {"thread_id": thread_id},
@@ -154,6 +190,7 @@ def retrieve_from_rag(query: str, thread_id: str, k: int = 4, weights: Optional[
         }
     )
 
+    # 2. Sparse keyword corpus scoped to current thread
     all_data = vectorstore.get(where={"thread_id": thread_id})
     all_raw_docs = all_data.get("documents", [])
     all_raw_metas = all_data.get("metadatas", [])
@@ -165,6 +202,7 @@ def retrieve_from_rag(query: str, thread_id: str, k: int = 4, weights: Optional[
 
     bm25_retriever = BM25Retriever(sparse_docs, k=k)
 
+    # 3. Fuse dense and sparse ranks using RRF
     retrievers = [vector_retriever, bm25_retriever]
 
     matched_docs = hybrid_retrieve(
@@ -177,6 +215,7 @@ def retrieve_from_rag(query: str, thread_id: str, k: int = 4, weights: Optional[
     if not matched_docs:
         return "No relevant uploaded docs content found"
 
+    # 4. Construct citation payload for downstream LLM synthesis
     results = []
     for i, doc in enumerate(matched_docs, start=1):
         source = clean_filename(doc.metadata.get("source", "uploaded document"))

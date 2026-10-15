@@ -2,16 +2,20 @@ import math
 from langchain_core.tools import tool
 from langchain_tavily import TavilySearch
 from dotenv import load_dotenv
-from database import save_memory,search_memory
+from database import save_memory, search_memory
 from rag import retrieve_from_rag
+
 load_dotenv()
 
+# Thread contextualization state synced before each agent stream execution
 CURRENT_THREAD_ID = 'default'
 
-def set_current_thread_id(thread_id:str):
+def set_current_thread_id(thread_id: str):
+    """Update execution context so tools can scope storage and retrieval to active thread."""
     global CURRENT_THREAD_ID
     CURRENT_THREAD_ID = thread_id
 
+# Real-time search engine for current events, prices, and external queries
 web_search = TavilySearch(
     max_result=5,
     topic='general',
@@ -25,8 +29,8 @@ def calculator(expression: str) -> str:
     Input should be a valid math expression.
     Example: 2 + 2, math.sqrt(16), 10 * 5
     """
-
     try:
+        # Sandboxed evaluation restricting dangerous built-in operations
         allowed = {
             "math": math,
             "abs": abs,
@@ -35,44 +39,43 @@ def calculator(expression: str) -> str:
             "max": max,
             "sum": sum
         }
-
         result = eval(expression, {"__builtins__": {}}, allowed)
         return str(result)
-
     except Exception as e:
         return f"Calculation error: {str(e)}"
 
 @tool
-def remember_this(memory: str) ->str:
+def remember_this(memory: str) -> str:
     """
-    Save an important user preference or fact inot long-term memroy.
-    Use this when the user asks you to remember something """
-
+    Save an important user preference or fact into long-term memory.
+    Use this when the user asks you to remember something.
+    """
     return save_memory(
         thread_id=CURRENT_THREAD_ID,
         memory=memory
     )
+
 @tool
-def recall_memory(query:str)->str:
-    """Recall saved long-term memories about the user or this conversation"""
+def recall_memory(query: str) -> str:
+    """Recall saved long-term memories about the user or this conversation."""
     return search_memory(
         thread_id=CURRENT_THREAD_ID,
         query=query
     )
 
 @tool 
-def search_uploaded_documents(query:str)->str:
+def search_uploaded_documents(query: str) -> str:
     """
     Search uploaded documents for relevant information.
-    Use this when the user asks about uploaded PDFs,TXT,notes,files, or documents.
+    Use this when the user asks about uploaded PDFs, TXT, notes, files, or documents.
     """
-
     return retrieve_from_rag(
         query=query,
         thread_id=CURRENT_THREAD_ID
     )
 
-tools=[
+# Exported tool registry bound to the LLM agent
+tools = [
     calculator,
     search_uploaded_documents,
     remember_this,

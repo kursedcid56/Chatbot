@@ -216,3 +216,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Application Runtime, Storage & Secrets
+.env
+uploads/
+data/
+chroma_db/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.bin

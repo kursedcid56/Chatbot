@@ -20,6 +20,7 @@ Path('data').mkdir(exist_ok=True)
 
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
+# Supported Gemini model routing whitelist
 ALLOWED_MODELS = {
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
@@ -28,7 +29,7 @@ ALLOWED_MODELS = {
 }
 
 SYSTEM_PROMPT = """
-You are a helpful Agentic AI assistant named JarvisGPT similar to ChatGPT.
+You are a helpful Agentic AI assistant named Jarvis similar to ChatGPT.
 
 You can:
 1. Answer normal questions.
@@ -38,19 +39,23 @@ You can:
 5. Remember important user information using the memory tool.
 6. Recall memory when useful.
 7. Use calculator for math.
+8. Analyze and interpret images sent by the user (OCR, diagrams, charts, photos, or screenshots).
 
 Rules:
 - If the user asks about latest news, current events, recent updates, today's information, current prices, etc., use Tavily Search.
 - If the user asks about an uploaded document, use search_uploaded_documents.
 - If the user asks you to remember something, use remember_this.
+- Privacy & Security: NEVER use remember_this to store passwords, PINs, OTP codes, credit cards, or secret API keys, even if requested. If a user provides confidential credentials, refuse to save them, explain that storing sensitive credentials is a security violation, and advise them to change/protect their secrets.
 - If the user asks about previous preferences or saved facts, use recall_memory.
 - Use calculator for math questions.
+- If the user provides an image, inspect the visual content, extract any text accurately, and answer user queries based on the image.
 - When using web search, summarize clearly and mention that the answer is based on web search results.
 - When answering from uploaded documents, always cite the source file and specific section/article clearly at the end under a 'Sources:' header in a human-friendly format (e.g. '- [File Name] — [Section / Article / Heading]'). Never display raw UUID hashes or technical chunk numbers.
 - Be clear, helpful, and concise.
 """
 
 def normalize_model_name(model_name: str | None) -> str:
+    """Validate requested model against whitelist with fallback to default."""
     if not model_name:
         return DEFAULT_MODEL
     model_name = model_name.strip()
@@ -59,6 +64,7 @@ def normalize_model_name(model_name: str | None) -> str:
     return model_name
 
 def build_agent(model_name: str):
+    """Compile a LangGraph ReAct agent workflow with persistent SQLite state checkpoints."""
     selected_model = normalize_model_name(model_name)
 
     llm = ChatGoogleGenerativeAI(
@@ -79,6 +85,7 @@ def build_agent(model_name: str):
 
     tool_node = ToolNode(tools)
 
+    # ReAct cycle: START -> chatbot -> (conditional: tools -> chatbot | END)
     workflow = StateGraph(MessagesState)
 
     workflow.add_node('chatbot', chatbot_node)
@@ -88,6 +95,7 @@ def build_agent(model_name: str):
     workflow.add_conditional_edges('chatbot', tools_condition)
     workflow.add_edge("tools", 'chatbot')
 
+    # Thread-level message persistence across conversational turns
     conn = sqlite3.connect(
         'data/langraph_checkpoints.sqlite',
         check_same_thread=False
@@ -97,9 +105,11 @@ def build_agent(model_name: str):
 
     return workflow.compile(checkpointer=checkpointer)
 
+# Singleton cache avoiding redundant graph recompilations per request
 _AGENT_CACHE = {}
 
 def get_agent(model_name: str | None = None):
+    """Retrieve or lazily instantiate compiled agent for the specified model."""
     selected_model = normalize_model_name(model_name)
 
     if selected_model not in _AGENT_CACHE:

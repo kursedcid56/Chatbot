@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>jarvisGPT — Agentic AI Chatbot</title>
+    <title>Jarvis — Agentic AI Chatbot</title>
     <!-- Phosphor Icons & Fonts -->
     <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/bold/style.css">
     <link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
@@ -406,6 +406,17 @@
         .user-file-attachment i {
             font-size: 1.1rem;
             color: var(--accent-cyan);
+        }
+
+        .user-bubble img {
+            max-width: 280px;
+            max-height: 220px;
+            border-radius: var(--radius-sm);
+            display: block;
+            margin-bottom: 6px;
+            object-fit: contain;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--border-subtle);
         }
 
         /* Pending File Preview Above Input */
@@ -852,7 +863,7 @@
                 <polygon points="34,41 86,41 60,86" stroke="#7dd3fc" stroke-width="2" fill="none"/>
                 <polygon points="44,48 76,48 60,76" fill="url(#logoArcGlow)"/>
             </svg>
-            <span>JarvisGPT</span>
+            <span>Jarvis</span>
         </a>
 
         <button class="new-chat-btn" onclick="startNewChat()">
@@ -913,10 +924,10 @@
 
         <!-- INPUT BAR (MATCHING IMAGE 2 EXACTLY) -->
         <div class="input-container">
-            <!-- Pending File Attachment Preview (Shown before sending) -->
             <div class="pending-file-container" id="pendingFileContainer">
                 <div class="pending-file-pill">
-                    <div class="pending-file-icon">
+                    <img id="pendingImgThumb" style="display:none; width:34px; height:34px; object-fit:cover; border-radius:6px; flex-shrink:0;" alt="preview" />
+                    <div class="pending-file-icon" id="pendingFileIcon">
                         <i class="ph-bold ph-file-text"></i>
                     </div>
                     <div class="pending-file-details">
@@ -930,9 +941,8 @@
             </div>
 
             <div class="input-bar">
-                <!-- Attachment Button on Left (Image 2) -->
-                <input type="file" id="fileInput" style="display:none;" onchange="handleFileSelect(event)" accept=".pdf,.docx,.txt,.md,.py,.csv">
-                <button class="btn-attach" onclick="document.getElementById('fileInput').click()" title="Attach document for RAG">
+                <input type="file" id="fileInput" style="display:none;" onchange="handleFileSelect(event)" accept=".pdf,.docx,.txt,.md,.py,.csv,.png,.jpg,.jpeg,.webp,.gif">
+                <button class="btn-attach" onclick="document.getElementById('fileInput').click()" title="Attach document or image (or paste with Ctrl+V)">
                     <i class="ph ph-paperclip"></i>
                 </button>
 
@@ -956,7 +966,7 @@
 
             <!-- Disclaimer (Image 2) -->
             <div class="disclaimer">
-                JarvisGPT can make mistakes. Check important info.
+                Jarvis can make mistakes. Check important info.
             </div>
         </div>
     </main>
@@ -1250,26 +1260,87 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
 
-        function handleFileSelect(e) {
-            const file = e.target.files[0];
-            if (!file) return;
+        function isImageFile(file) {
+            if (!file) return false;
+            if (file.type && file.type.startsWith('image/')) return true;
+            return /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name || '');
+        }
 
+        function attachPendingFile(file) {
+            if (!file) return;
             pendingFile = file;
-            document.getElementById('pendingFileName').innerText = file.name;
-            document.getElementById('pendingFileSize').innerText = `(${formatFileSize(file.size)})`;
-            document.getElementById('pendingFileContainer').style.display = 'flex';
-            
+
+            const nameEl = document.getElementById('pendingFileName');
+            const sizeEl = document.getElementById('pendingFileSize');
+            const imgThumb = document.getElementById('pendingImgThumb');
+            const fileIcon = document.getElementById('pendingFileIcon');
+
+            if (nameEl) nameEl.innerText = file.name || 'image.png';
+            if (sizeEl) sizeEl.innerText = `(${formatFileSize(file.size)})`;
+
+            if (isImageFile(file) && imgThumb) {
+                imgThumb.src = URL.createObjectURL(file);
+                imgThumb.style.display = 'block';
+                if (fileIcon) fileIcon.style.display = 'none';
+            } else {
+                if (imgThumb) imgThumb.style.display = 'none';
+                if (fileIcon) fileIcon.style.display = 'flex';
+            }
+
+            const container = document.getElementById('pendingFileContainer');
+            if (container) container.style.display = 'flex';
+
             const input = document.getElementById('userInput');
-            input.focus();
+            if (input) input.focus();
+        }
+
+        function handleFileSelect(e) {
+            const file = e.target.files && e.target.files[0];
+            if (file) attachPendingFile(file);
         }
 
         function removePendingFile() {
+            if (pendingFile) {
+                const imgThumb = document.getElementById('pendingImgThumb');
+                if (imgThumb && imgThumb.src && imgThumb.src.startsWith('blob:')) {
+                    URL.revokeObjectURL(imgThumb.src);
+                    imgThumb.src = '';
+                    imgThumb.style.display = 'none';
+                }
+            }
             pendingFile = null;
             const fileInput = document.getElementById('fileInput');
             if (fileInput) fileInput.value = '';
             const container = document.getElementById('pendingFileContainer');
             if (container) container.style.display = 'none';
         }
+
+        document.addEventListener('paste', (e) => {
+            const items = (e.clipboardData || window.clipboardData)?.items;
+            if (!items) return;
+            for (let i = 0; i < items.length; i++) {
+                if (items[i].type && items[i].type.indexOf('image') !== -1) {
+                    const blob = items[i].getAsFile();
+                    if (blob) {
+                        const ext = blob.type.split('/')[1] || 'png';
+                        const file = new File([blob], `screenshot_${Date.now()}.${ext}`, { type: blob.type });
+                        attachPendingFile(file);
+                        break;
+                    }
+                }
+            }
+        });
+
+        window.addEventListener('dragover', (e) => {
+            e.preventDefault();
+        });
+        window.addEventListener('drop', (e) => {
+            e.preventDefault();
+            const files = e.dataTransfer && e.dataTransfer.files;
+            if (files && files.length > 0) {
+                attachPendingFile(files[0]);
+            }
+        });
 
         // ================= MESSAGES & TOOL INDICATOR =================
         function appendMessage(role, content, isStreaming = false, attachment = null) {
@@ -1285,13 +1356,22 @@
                 let displayContent = content || '';
 
                 if (attachment) {
-                    const sizeStr = attachment.size ? ` (${formatFileSize(attachment.size)})` : '';
-                    attachmentHtml = `
-                        <div class="user-file-attachment">
-                            <i class="ph-bold ph-file-text"></i>
-                            <span><strong>${escapeHtml(attachment.name)}</strong>${sizeStr}</span>
-                        </div>
-                    `;
+                    if (isImageFile(attachment)) {
+                        const imgUrl = URL.createObjectURL(attachment);
+                        attachmentHtml = `
+                            <div class="user-image-attachment" style="margin-bottom: 6px;">
+                                <img src="${imgUrl}" alt="${escapeHtml(attachment.name)}" style="max-width: 280px; max-height: 220px; border-radius: 8px; display: block; object-fit: contain; background: rgba(0,0,0,0.2); border: 1px solid var(--border-subtle);" />
+                            </div>
+                        `;
+                    } else {
+                        const sizeStr = attachment.size ? ` (${formatFileSize(attachment.size)})` : '';
+                        attachmentHtml = `
+                            <div class="user-file-attachment">
+                                <i class="ph-bold ph-file-text"></i>
+                                <span><strong>${escapeHtml(attachment.name)}</strong>${sizeStr}</span>
+                            </div>
+                        `;
+                    }
                 } else if (displayContent.startsWith('[Attached document:')) {
                     const match = displayContent.match(/^\[Attached document:\s*([^\]]+)\](?:\n\n|\n)?([\s\S]*)$/);
                     if (match) {
@@ -1308,9 +1388,9 @@
 
                 let textHtml = '';
                 if (displayContent) {
-                    textHtml = `<div class="user-text">${escapeHtml(displayContent)}</div>`;
+                    textHtml = `<div class="user-text">${marked.parse(displayContent)}</div>`;
                 } else if (attachmentHtml) {
-                    textHtml = `<div class="user-text" style="font-style: italic; color: var(--text-secondary);">Analyze this document</div>`;
+                    textHtml = `<div class="user-text" style="font-style: italic; color: var(--text-secondary);">Analyze this attachment</div>`;
                 }
 
                 row.innerHTML = `<div class="user-bubble">${attachmentHtml}${textHtml}</div>`;
@@ -1348,6 +1428,8 @@
                 label = 'Hybrid Search: Dense Vector + BM25 (RRF)...';
             } else if (toolName.includes('memory')) {
                 label = 'Accessing long-term memory...';
+            } else if (toolName.includes('vision') || toolName.includes('image')) {
+                label = 'Analyzing image with Gemini Vision...';
             } else if (!toolName.includes('...') && !toolName.includes('ing')) {
                 label = `Using ${toolName}...`;
             }
@@ -1391,8 +1473,19 @@
             const selectedModel = document.getElementById('modelSelect').value;
 
             try {
-                // If a document was attached, upload and index it into RAG first
-                if (fileToUpload) {
+                const isImg = isImageFile(fileToUpload);
+                let base64Image = null;
+
+                if (isImg) {
+                    showToolBadge(assistantRow, 'Analyzing image with Gemini Vision...');
+                    base64Image = await new Promise((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result);
+                        reader.onerror = reject;
+                        reader.readAsDataURL(fileToUpload);
+                    });
+                    markToolsDone(assistantRow);
+                } else if (fileToUpload) {
                     showToolBadge(assistantRow, `Uploading & indexing '${fileToUpload.name}' into RAG...`);
                     const formData = new FormData();
                     formData.append('file', fileToUpload);
@@ -1401,14 +1494,13 @@
                     let uploadRes = await fetch('/upload', { method: 'POST', body: formData });
                     const uploadData = await uploadRes.json();
                     if (!uploadRes.ok || !uploadData.success) {
-                        throw new Error(uploadData.message || "Failed to upload document");
+                        throw new Error(uploadData.message || uploadData.error || "Failed to upload document");
                     }
                     markToolsDone(assistantRow);
                 }
 
-                // Determine final prompt for JarvisGPT
                 let finalPrompt = msg;
-                if (fileToUpload) {
+                if (fileToUpload && !isImg) {
                     if (msg) {
                         finalPrompt = `[Attached document: ${fileToUpload.name}]\n\n${msg}`;
                     } else {
@@ -1422,7 +1514,9 @@
                     body: JSON.stringify({
                         message: finalPrompt,
                         thread_id: currentThreadId,
-                        model: selectedModel
+                        model: selectedModel,
+                        image: base64Image,
+                        image_name: fileToUpload ? fileToUpload.name : null
                     })
                 });
 
